@@ -1,0 +1,11 @@
+dep_bool_menu "eibd client support" EIBD_SUPPORT $CONFIG_EXPERIMENTAL 
+	if [ "$DNS_SUPPORT" = "y" ]; then
+		string "eibd server hostname" CONF_EIBD_SERVER "mhbox"
+	else
+		ip "eibd IP" CONF_EIBD_IP "192.168.178.20" 
+	fi
+	int "eibd port" CONF_EIBD_PORT 6720
+	comment  "Debugging Flags"
+	dep_bool 'eibd communication' DEBUG_EIBDCOM $DEBUG $EIBD_SUPPORT
+	dep_bool 'eibd' DEBUG_EIBD $DEBUG $EIBD_SUPPORT
+endmenu

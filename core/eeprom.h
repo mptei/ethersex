@@ -143,6 +143,16 @@ struct eeprom_config_t
 #ifdef TANKLEVEL_SUPPORT
   tanklevel_params_t tanklevel_params;
 #endif
+
+#ifdef EIBD_SUPPORT
+#ifdef DNS_SUPPORT
+  char eibd_host[16];
+#else
+  uint8_t eibd_ip[IPADDR_LEN];
+#endif
+  uint16_t eibd_port;
+#endif
+
   uint8_t crc;
 };
 

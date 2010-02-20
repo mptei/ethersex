@@ -3127,3 +3127,15 @@ IOUDP_PROTOCOL_SUPPORT
  This module allows very fast polling and setting without much network
  overhead. Recommended use only in a trusted network environment.
 
+EIBD_SUPPORT
+ Support to communicate with eibd via group sockets. Allows you
+ to receive and send events to EIB/KNX group addresses.
+
+CONF_EIBD_SERVER
+ Server name of host where eibd is running.
+
+CONF_EIBD_IP
+ IP of server where eibd is running.
+
+CONF_EIBD_PORT
+ Port on eibd server where eibd is listening (default:6720).

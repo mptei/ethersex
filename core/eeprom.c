@@ -180,7 +180,18 @@ eeprom_init (void)
   };
   eeprom_save (tanklevel_params, &tanklevel_temp, sizeof(tanklevel_params_t));
 #endif
-  eeprom_update_chksum ();
+
+#ifdef EIBD_SUPPORT
+#ifdef DNS_SUPPORT
+	eeprom_save_P(eibd_host, PSTR(CONF_EIBD_SERVER), 16);
+#else
+    	set_CONF_EIBD_IP(&ip);
+    	eeprom_save(eibd_ip, &ip, IPADDR_LEN);
+#endif
+	eeprom_save_int(eibd_port, CONF_EIBD_PORT);
+#endif
+
+  eeprom_update_chksum();
 }
 
 
