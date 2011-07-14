@@ -29,9 +29,11 @@ struct dhcp_connection_state_t {
     uint8_t serverid[4];
     
     uint16_t lease_time[2];
+    uint32_t renewal_time;
+    uint16_t rebinding_time[2];
     uint16_t ipaddr[2];
     uint16_t netmask[2];
-    uint16_t dnsaddr[2];
+    uip_ipaddr_t dnsaddr;
     uint16_t default_router[2];
     uint16_t ntpaddr[2];
 

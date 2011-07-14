@@ -36,14 +36,21 @@
 
 #include "protocols/uip/uip.h"
 #include "core/eeprom.h"
+# include "core/debug.h"
 
 #include "dhcp_state.h"
 #include "dhcp.h"
+
+#ifdef DNS_SUPPORT
+#include "protocols/dns/resolv.h"
+#endif
 
 #define STATE_INITIAL         0
 #define STATE_DISCOVERING     1
 #define STATE_REQUESTING      2
 #define STATE_CONFIGURED      3
+#define STATE_RENEWING        4
+#define STATE_REBINDING       5
 
 struct dhcp_msg {
   uint8_t op, htype, hlen, hops;
@@ -90,13 +97,15 @@ struct dhcp_msg {
 #define DHCP_OPTION_MSG_TYPE     53
 #define DHCP_OPTION_SERVER_ID    54
 #define DHCP_OPTION_REQ_LIST     55
+#define DHCP_OPTION_RENEWAL_TIME 58
+#define DHCP_OPTION_REBINDING_TIME 59
 #define DHCP_OPTION_CLIENT_ID    61
 #define DHCP_OPTION_END         255
 
 static const uint8_t xid[4] = {0xad, 0xde, 0x12, 0x23};
 static const uint8_t magic_cookie[4] = {99, 130, 83, 99};
 
-static uint8_t tick_sec;
+static uint32_t tick_sec;
 
 /*---------------------------------------------------------------------------*/
 static uint8_t *
@@ -231,6 +240,8 @@ parse_options(uint8_t *optptr, int len)
   uint8_t *end = optptr + len;
   uint8_t type = 0;
 
+  uip_udp_conn->appstate.dhcp.renewal_time = 0;
+
   while(optptr < end) {
     switch(*optptr) {
     case DHCP_OPTION_SUBNET_MASK:
@@ -240,7 +251,8 @@ parse_options(uint8_t *optptr, int len)
       memcpy(uip_udp_conn->appstate.dhcp.default_router, optptr + 2, 4);
       break;
     case DHCP_OPTION_DNS_SERVER:
-      memcpy(uip_udp_conn->appstate.dhcp.dnsaddr, optptr + 2, 4);
+      uip_ipaddr(&uip_udp_conn->appstate.dhcp.dnsaddr,
+      		 *(optptr+2), *(optptr+3),*(optptr+4),*(optptr+5));
       break;
     case DHCP_OPTION_MSG_TYPE:
       type = *(optptr + 2);
@@ -254,11 +266,27 @@ parse_options(uint8_t *optptr, int len)
     case DHCP_OPTION_LEASE_TIME:
       memcpy(uip_udp_conn->appstate.dhcp.lease_time, optptr + 2, 4);
       break;
+    case DHCP_OPTION_RENEWAL_TIME:
+      uip_udp_conn->appstate.dhcp.renewal_time = ((uint32_t)*(optptr+2))<<24 | ((uint32_t)*(optptr+3))<<16 
+      	                                         | *(optptr+4)<<8 | *(optptr+5);
+      debug_printf("dhcp: renewal time: %lu (%lu, %lu)", uip_udp_conn->appstate.dhcp.renewal_time,
+      		uip_udp_conn->appstate.dhcp.renewal_time>>16, uip_udp_conn->appstate.dhcp.renewal_time&0xFFFF);
+      uip_udp_conn->appstate.dhcp.renewal_time = 120;
+      break;
+    case DHCP_OPTION_REBINDING_TIME:
+      memcpy(uip_udp_conn->appstate.dhcp.rebinding_time, optptr + 2, 4);
+      break;
     case DHCP_OPTION_END:
       return type;
     }
 
     optptr += optptr[1] + 2;
+  }
+  if (0 == uip_udp_conn->appstate.dhcp.renewal_time) {
+    uip_udp_conn->appstate.dhcp.renewal_time = (ntohs(uip_udp_conn->appstate.dhcp.lease_time[0])*65536ul + ntohs(uip_udp_conn->appstate.dhcp.lease_time[1]))/2;
+    if (0 == uip_udp_conn->appstate.dhcp.renewal_time) {
+      uip_udp_conn->appstate.dhcp.renewal_time = 432000; // default to 5 days
+    }
   }
   return type;
 }
@@ -363,6 +391,7 @@ void dhcp_net_main(void) {
       break;
 
     case STATE_REQUESTING:
+    case STATE_RENEWING:
 
       if (parse_msg() == DHCPACK) {
 	uip_udp_conn->appstate.dhcp.state = STATE_CONFIGURED;
@@ -372,7 +401,7 @@ void dhcp_net_main(void) {
 	uip_setnetmask(uip_udp_conn->appstate.dhcp.netmask);
 
 #ifdef DNS_SUPPORT
-	resolv_conf(uip_udp_conn->appstate.dhcp.dnsaddr);
+	resolv_conf(&uip_udp_conn->appstate.dhcp.dnsaddr);
 	//	eeprom_save(dns_server, &uip_udp_conn->appstate.dhcp.dnsaddr, IPADDR_LEN);
 #endif
 
@@ -388,8 +417,9 @@ void dhcp_net_main(void) {
 	// eeprom_update_chksum();
 
 	/* Remove the bootp connection */
-	uip_udp_remove(uip_udp_conn);
-
+	//uip_udp_remove(uip_udp_conn);
+        tick_sec = 0;
+      debug_printf("dhcp: finished");
       }
 
       break;
@@ -418,12 +448,27 @@ void dhcp_net_main(void) {
       
 
     case STATE_REQUESTING:
+    case STATE_RENEWING:
       if (tick_sec>uip_udp_conn->appstate.dhcp.retry_timer) {
 	send_request();
 	uip_flags &= ~UIP_NEWDATA;
-	if (uip_udp_conn->appstate.dhcp.retry_counter++>10)
-	  return dhcp_set_static();
+	if (uip_udp_conn->appstate.dhcp.retry_counter++>10) {
+	  if (STATE_RENEWING == uip_udp_conn->appstate.dhcp.state) {
+	    uip_udp_conn->appstate.dhcp.state = STATE_DISCOVERING;
+	    uip_udp_conn->appstate.dhcp.retry_counter=0;
+	  } else {
+	    return dhcp_set_static();
+	  }
+	}
 	uip_udp_conn->appstate.dhcp.retry_timer = 2; // retry
+	tick_sec = 0;
+      }
+      break;
+
+    case STATE_CONFIGURED:
+      if (tick_sec > uip_udp_conn->appstate.dhcp.renewal_time) {
+	send_request();
+	uip_udp_conn->appstate.dhcp.state = STATE_RENEWING;
 	tick_sec = 0;
       }
       break;
